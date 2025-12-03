@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 from random import sample
+from tracemalloc import start
 from typing import Mapping, Sequence, Optional, Tuple, List, Dict, Set
 
 import numpy as np
@@ -28,6 +29,8 @@ class FastMarchingTree:
     indices_path: List[int]
     optimal_path: List[Tuple[float, float]]
     connection_radius: float
+    start: Tuple[float, float]
+    goal: Tuple[float, float]
 
     def __init__(
         self,
@@ -39,29 +42,63 @@ class FastMarchingTree:
         self.collection_points: Optional[Mapping[str, CollectionPoint]] = initObservations.collection_points
         self.n_samples = n_samples
 
-    # Plan a path from start to goal using FMT*
-    def plan_path(self, start: Tuple[float, float], goal: Tuple[float, float]) -> List[Tuple[float, float]]:
-
         self.sample_points = self._sample_workspace(self.n_samples)
 
-        self.indices_path = self._fmt_star(start, goal)
+        self.connection_radius = self._compute_connection_radius(len(self.sample_points))
+
+        pts = np.array(self.sample_points)
+        self.kdtree = KDTree(pts)
+
+    # Plan a path from start to goal using FMT*
+    def plan_path(self, start: Tuple[float, float], goal: Tuple[float, float]) -> List[Tuple[float, float]]:
+        self._start = start
+        self._goal = goal
+
+        self.indices_path, self._last_points_snapshot = self._fmt_star(start, goal)
         self.optimal_path = self._indices_path_to_path()
 
         self.export_to_json()
 
         return self.optimal_path
 
+    # compute the total Euclidean length of the optimal path
+    def get_optimal_path_length(self) -> float:
+        if not hasattr(self, "optimal_path") or len(self.optimal_path) < 2:
+            return 0.0
+
+        total = 0.0
+        for i in range(len(self.optimal_path) - 1):
+            p = self.optimal_path[i]
+            q = self.optimal_path[i + 1]
+            total += self._distance(p, q)
+        return total
+
     # FMT* core algorithm
-    def _fmt_star(self, start: Tuple[float, float], goal: Tuple[float, float]) -> List[int]:
+    def _fmt_star(
+        self, start: Tuple[float, float], goal: Tuple[float, float]
+    ) -> Tuple[List[int], List[Tuple[float, float]]]:
+        # append start and goal
+        start_idx = len(self.sample_points)
+        goal_idx = len(self.sample_points) + 1
         self.sample_points.append(start)
         self.sample_points.append(goal)
-        x_init_idx = len(self.sample_points) - 2
-        x_goal_idx = len(self.sample_points) - 1
 
-        self.connection_radius = self._compute_connection_radius(len(self.sample_points))
+        # REBUILD KD-TREE WITH FULL POINT SET
+        pts = np.array(self.sample_points)
+        self.kdtree = KDTree(pts)
+
+        # full neighbor list recomputed symmetrically
+        self.neighbors = []
+        for i, p in enumerate(pts):
+            idxs = self.kdtree.query_ball_point(p, self.connection_radius)
+            if i in idxs:
+                idxs.remove(i)
+            self.neighbors.append(idxs)
+
+        x_init_idx = start_idx
+        x_goal_idx = goal_idx
 
         n = len(self.sample_points)
-        self._build_neighbors()
 
         V = set(range(n))
 
@@ -111,8 +148,12 @@ class FastMarchingTree:
             Vclosed.add(z)
 
         if x_goal_idx not in parent:
-            return []
+            # cleanup
+            self.sample_points.pop()
+            self.sample_points.pop()
+            return [], []
 
+        points_snapshot = list(self.sample_points)
         path_indices: List[int] = []
         cur = x_goal_idx
         while cur is not None:
@@ -120,7 +161,12 @@ class FastMarchingTree:
             cur = parent.get(cur)
 
         path_indices.reverse()
-        return path_indices
+
+        # cleanup start + goal
+        self.sample_points.pop()
+        self.sample_points.pop()
+
+        return path_indices, points_snapshot
 
     # Compute free space area μ(X_free)
     def _compute_free_space_area(self) -> float:
@@ -128,11 +174,9 @@ class FastMarchingTree:
         Compute μ(X_free): area of workspace minus polygonal obstacles.
         Used in the FMT* connection radius formula.
         """
-        # Workspace boundary as polygon
         ring = self._get_workspace_linearring()
         workspace_poly = Polygon(ring)
 
-        # Collect all obstacle geometries
         obstacle_geoms = []
         for obs in self.static_obstacles:
             geom = obs.shape
@@ -144,12 +188,10 @@ class FastMarchingTree:
         if not obstacle_geoms:
             return workspace_poly.area
 
-        # Union obstacles and intersect with workspace (in case some extend outside)
         obstacles_union = unary_union(obstacle_geoms)
         obstacles_in_ws = obstacles_union.intersection(workspace_poly)
 
         free_area = workspace_poly.area - obstacles_in_ws.area
-        # guard against tiny negative due to numerical issues
         return max(free_area, 0.0)
 
     # Compute FMT* connection radius r_n
@@ -174,7 +216,8 @@ class FastMarchingTree:
 
     # Convert list of indices to list of points
     def _indices_path_to_path(self) -> List[Tuple[float, float]]:
-        return [self.sample_points[idx] for idx in self.indices_path]
+        snapshot = getattr(self, "_last_points_snapshot", self.sample_points)
+        return [snapshot[idx] for idx in self.indices_path]
 
     # get the LinearRing polygon defining the workspace boundary
     def _get_workspace_linearring(self):
@@ -193,16 +236,14 @@ class FastMarchingTree:
         halton = self._halton_sequence(size=n_samples, dim=2)
         samples = []
         for h in halton:
-            # scale Halton point into workspace bounds
             x = minx + h[0] * (maxx - minx)
             y = miny + h[1] * (maxy - miny)
 
             p = Point(x, y)
 
-            # (1) must be inside workspace
             if not boundary_polygon.contains(p):
                 continue
-            # (2) must NOT be inside any obstacle
+
             inside_obstacle = False
             for obs in self.static_obstacles:
                 geom = obs.shape
@@ -224,7 +265,6 @@ class FastMarchingTree:
     @staticmethod
     def _halton_sequence(size, dim, bases=None):
         if bases is None:
-            # First d primes, as suggested in the lecture
             bases = [2, 3, 5, 7, 11][:dim]
 
         def vdc(n, base):
@@ -246,24 +286,10 @@ class FastMarchingTree:
     def _distance(p: Tuple[float, float], q: Tuple[float, float]) -> float:
         return float(math.hypot(p[0] - q[0], p[1] - q[1]))
 
-    # build neighbor connections within connection radius, with KDTree acc. to Lecture
-    def _build_neighbors(self):
-        pts = np.array(self.sample_points)
-        tree = KDTree(pts)
-
-        neighbors = []
-        for i, p in enumerate(pts):
-            idxs = tree.query_ball_point(p, self.connection_radius)
-            idxs.remove(i)  # remove itself
-            neighbors.append(idxs)
-
-        self.neighbors = neighbors
-
     # check if the line segment between p and q is collision-free
     def _collision_free(self, p, q):
         segment = LineString([p, q])
 
-        # Check intersection with polygon obstacles
         for obs in self.static_obstacles:
             geom = obs.shape
             if geom.geom_type in ("Polygon", "MultiPolygon"):
@@ -272,23 +298,20 @@ class FastMarchingTree:
         return True
 
     # For debugging: export workspace, obstacles, and samples to JSON
+    # For debugging: export workspace, obstacles, and samples to JSON
     def export_to_json(self) -> str:
         import json
+        import re
+        import shutil
 
-        """
-        Export workspace polygon, obstacles, and sample points in JSON format.
-        Coordinates are represented as lists of [x, y].
-        """
-
-        # Workspace boundary
         ring = self._get_workspace_linearring()
         workspace_poly = Polygon(ring)
         workspace_coords = list(map(list, workspace_poly.exterior.coords))
 
-        # Obstacles
         obstacles_json = []
         for obs in self.static_obstacles:
             geom = obs.shape
+
             if geom.geom_type == "Polygon":
                 obstacles_json.append(
                     {
@@ -299,42 +322,62 @@ class FastMarchingTree:
                 )
 
             elif geom.geom_type == "MultiPolygon":
-                multi_list = []
+                polys = []
                 for poly in geom.geoms:
-                    multi_list.append(
+                    polys.append(
                         {
                             "type": "Polygon",
                             "exterior": list(map(list, poly.exterior.coords)),
                             "interiors": [list(map(list, interior.coords)) for interior in poly.interiors],
                         }
                     )
-                obstacles_json.append({"type": "MultiPolygon", "polygons": multi_list})
+                obstacles_json.append({"type": "MultiPolygon", "polygons": polys})
 
-        # Samples
         samples_json = [list(pt) for pt in self.sample_points]
+        optimal_path_json = [list(pt) for pt in getattr(self, "optimal_path", [])]
 
-        # Optimal path
-        if hasattr(self, "optimal_path"):
-            optimal_path_json = [list(pt) for pt in self.optimal_path]
-        else:
-            optimal_path_json = []
-
-        # Construct JSON-friendly object
         data = {
             "workspace_polygon": workspace_coords,
             "obstacles": obstacles_json,
             "samples": samples_json,
-            # "indices_path": self.indices_path if hasattr(self, "indices_path") else [],
             "optimal_path": optimal_path_json,
+            "start": list(self._start),
+            "goal": list(self._goal),
         }
 
         json_str = json.dumps(data, indent=2)
 
-        # persist to /out/14 so it shows up next to the rendered report
+        # Original output directory
         project_root = Path(__file__).resolve().parents[4]
-        output_dir = project_root / "out" / "14"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_file = output_dir / "fmt_samples.json"
+        base_dir = project_root / "out" / "14"
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+        # NEW: use subfolder "json_paths"
+        json_dir = base_dir / "json_paths"
+        json_dir.mkdir(parents=True, exist_ok=True)
+
+        # NEW: if folder contains files on FIRST run, clear all of them
+        if not hasattr(self, "_json_folder_cleaned"):
+            for f in json_dir.iterdir():
+                if f.is_file():
+                    f.unlink()
+            # mark cleaned so it only happens once
+            self._json_folder_cleaned = True
+
+        # Numbered filenames
+        pattern = re.compile(r"^fmt_samples_(\d+)\.json$")
+        existing = [f for f in json_dir.iterdir() if f.is_file()]
+
+        used_nums = []
+        for f in existing:
+            m = pattern.match(f.name)
+            if m:
+                used_nums.append(int(m.group(1)))
+
+        next_num = 0 if not used_nums else max(used_nums) + 1
+        filename = f"fmt_samples_{next_num}.json"
+
+        output_file = json_dir / filename
         output_file.write_text(json_str, encoding="utf-8")
 
         return json_str

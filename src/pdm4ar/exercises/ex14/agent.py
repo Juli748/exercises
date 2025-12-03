@@ -82,8 +82,23 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
 
     def send_plan(self, init_sim_obs: InitSimGlobalObservations) -> str:
 
+        import random
+
+        # number of random tests
+        num_tests = 20
+
         fmt = FastMarchingTree(initObservations=init_sim_obs, n_samples=10000)
-        fmt.plan_path((-5, -1), (5, 5))
+
+        for i in range(num_tests):
+            # generate random points
+            start = (random.uniform(-10, 10), random.uniform(-10, 10))
+            goal = (random.uniform(-10, 10), random.uniform(-10, 10))
+
+            print(f"Test {i+1}: start={start}, goal={goal}")
+            path = fmt.plan_path(start, goal)
+
+        assert True
+
         # TODO: implement here your global planning stack.
         global_plan_message = GlobalPlanMessage(
             fake_id=1,
