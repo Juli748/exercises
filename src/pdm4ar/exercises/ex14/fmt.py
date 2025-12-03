@@ -33,19 +33,25 @@ class FastMarchingTree:
     start: Tuple[float, float]
     goal: Tuple[float, float]
 
+    robot_radius: float = 0.6  # From diff drive geometry default
+
     def __init__(
         self,
         initObservations: InitSimGlobalObservations,
         n_samples: int = 500,
+        connection_radius_factor: float = 1.5,
+        robot_clearance: float = 0.1,
     ):
         self.static_obstacles: Sequence[StaticObstacle] = initObservations.dg_scenario.static_obstacles
         self.shared_goals: Optional[Mapping[str, SharedPolygonGoal]] = initObservations.shared_goals
         self.collection_points: Optional[Mapping[str, CollectionPoint]] = initObservations.collection_points
         self.n_samples = n_samples
+        self.robot_radius += robot_clearance
 
+        # sample random points within the workspace and non colliding using the Halton sequence
         self.sample_points = self._sample_workspace(self.n_samples)
 
-        self.connection_radius = self._compute_connection_radius(len(self.sample_points))
+        self.connection_radius = connection_radius_factor * self._compute_connection_radius(len(self.sample_points))
 
         pts = np.array(self.sample_points)
         self.kdtree = KDTree(pts)
@@ -226,6 +232,7 @@ class FastMarchingTree:
     def _indices_path_to_path(self, points_snapshot: Sequence[Tuple[float, float]]) -> List[Tuple[float, float]]:
         return [points_snapshot[idx] for idx in self.indices_path]
 
+    # Build neighbor graph using KDTree
     def _build_neighbor_graph(self, pts: NDArray) -> List[List[int]]:
         neighbors: List[List[int]] = []
         for i in range(len(pts)):
@@ -260,13 +267,18 @@ class FastMarchingTree:
             if not boundary_polygon.contains(p):
                 continue
 
+            # keep clearance from outer wall
+            if boundary_linearring.distance(p) <= self.robot_radius:
+                continue
+
             inside_obstacle = False
             for obs in self.static_obstacles:
                 geom = obs.shape
                 if geom.geom_type == "LinearRing":
                     continue
 
-                if geom.contains(p) or geom.touches(p):
+                # robot-radius-aware: reject if distance ≤ robot_radius
+                if geom.distance(p) <= self.robot_radius:
                     inside_obstacle = True
                     break
 
@@ -288,6 +300,7 @@ class FastMarchingTree:
             while n:
                 n, remainder = divmod(n, base)
                 denom *= base
+
                 vdc += remainder / denom
             return vdc
 
@@ -306,14 +319,20 @@ class FastMarchingTree:
     def _collision_free(self, p, q):
         segment = LineString([p, q])
 
+        # outer wall clearance
+        ring = self._get_workspace_linearring()
+        if segment.distance(ring) <= self.robot_radius:
+            return False
+
         for obs in self.static_obstacles:
             geom = obs.shape
             if geom.geom_type in ("Polygon", "MultiPolygon"):
-                if segment.intersects(geom):
+
+                # robot-radius-aware: collision if segment is within robot radius
+                if segment.distance(geom) <= self.robot_radius:
                     return False
         return True
 
-    # For debugging: export workspace, obstacles, and samples to JSON
     # For debugging: export workspace, obstacles, and samples to JSON
     def export_to_json(self) -> str:
         import json
@@ -363,24 +382,19 @@ class FastMarchingTree:
 
         json_str = json.dumps(data, indent=2)
 
-        # Original output directory
         project_root = Path(__file__).resolve().parents[4]
         base_dir = project_root / "out" / "14"
         base_dir.mkdir(parents=True, exist_ok=True)
 
-        # NEW: use subfolder "json_paths"
         json_dir = base_dir / "json_paths"
         json_dir.mkdir(parents=True, exist_ok=True)
 
-        # NEW: if folder contains files on FIRST run, clear all of them
         if not hasattr(self, "_json_folder_cleaned"):
             for f in json_dir.iterdir():
                 if f.is_file():
                     f.unlink()
-            # mark cleaned so it only happens once
             self._json_folder_cleaned = True
 
-        # Numbered filenames
         pattern = re.compile(r"^fmt_samples_(\d+)\.json$")
         existing = [f for f in json_dir.iterdir() if f.is_file()]
 
