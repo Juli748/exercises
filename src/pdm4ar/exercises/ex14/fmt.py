@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from os import path
 from pathlib import Path
 from random import sample
 from tracemalloc import start
@@ -48,18 +49,23 @@ class FastMarchingTree:
 
         pts = np.array(self.sample_points)
         self.kdtree = KDTree(pts)
+        self.neighbors = self._build_neighbor_graph(pts)
 
     # Plan a path from start to goal using FMT*
-    def plan_path(self, start: Tuple[float, float], goal: Tuple[float, float]) -> List[Tuple[float, float]]:
+    def plan_path(
+        self, start: Tuple[float, float], goal: Tuple[float, float]
+    ) -> Tuple[List[Tuple[float, float]], float]:
         self._start = start
         self._goal = goal
 
-        self.indices_path, self._last_points_snapshot = self._fmt_star(start, goal)
-        self.optimal_path = self._indices_path_to_path()
+        indices, points_snapshot = self._fmt_star(start, goal)
+        self.indices_path = indices
+        self.optimal_path = self._indices_path_to_path(points_snapshot)
+        path_length = self.get_optimal_path_length()
 
         self.export_to_json()
 
-        return self.optimal_path
+        return self.optimal_path, path_length
 
     # compute the total Euclidean length of the optimal path
     def get_optimal_path_length(self) -> float:
@@ -77,28 +83,37 @@ class FastMarchingTree:
     def _fmt_star(
         self, start: Tuple[float, float], goal: Tuple[float, float]
     ) -> Tuple[List[int], List[Tuple[float, float]]]:
-        # append start and goal
-        start_idx = len(self.sample_points)
-        goal_idx = len(self.sample_points) + 1
-        self.sample_points.append(start)
-        self.sample_points.append(goal)
+        base_points = list(self.sample_points)
+        points = base_points + [start, goal]
 
-        # REBUILD KD-TREE WITH FULL POINT SET
-        pts = np.array(self.sample_points)
-        self.kdtree = KDTree(pts)
+        start_idx = len(base_points)
+        goal_idx = start_idx + 1
 
-        # full neighbor list recomputed symmetrically
-        self.neighbors = []
-        for i, p in enumerate(pts):
-            idxs = self.kdtree.query_ball_point(p, self.connection_radius)
-            if i in idxs:
-                idxs.remove(i)
-            self.neighbors.append(idxs)
+        neighbors: List[List[int]] = [list(nbs) for nbs in self.neighbors]
+        neighbors.append([])
+        neighbors.append([])
+
+        def connect_new_vertex(vertex_idx: int, vertex_point: Tuple[float, float]):
+            nearby = self.kdtree.query_ball_point(vertex_point, self.connection_radius)
+            for idx in nearby:
+                if vertex_idx not in neighbors[idx]:
+                    neighbors[idx].append(vertex_idx)
+                if idx not in neighbors[vertex_idx]:
+                    neighbors[vertex_idx].append(idx)
+
+        connect_new_vertex(start_idx, start)
+        connect_new_vertex(goal_idx, goal)
+
+        if self._distance(start, goal) <= self.connection_radius:
+            if goal_idx not in neighbors[start_idx]:
+                neighbors[start_idx].append(goal_idx)
+            if start_idx not in neighbors[goal_idx]:
+                neighbors[goal_idx].append(start_idx)
 
         x_init_idx = start_idx
         x_goal_idx = goal_idx
 
-        n = len(self.sample_points)
+        n = len(points)
 
         V = set(range(n))
 
@@ -115,19 +130,19 @@ class FastMarchingTree:
             z = min(Vopen, key=lambda i: cost[i])
             if z == x_goal_idx:
                 break
-            X_near = [x for x in self.neighbors[z] if x in Vunvisited]
+            X_near = [x for x in neighbors[z] if x in Vunvisited]
 
             for x in X_near:
-                Y_near = [y for y in self.neighbors[x] if y in Vopen]
+                Y_near = [y for y in neighbors[x] if y in Vopen]
                 if not Y_near:
                     continue
 
                 best_y = None
                 best_cost = math.inf
-                px = self.sample_points[x]
+                px = points[x]
 
                 for y in Y_near:
-                    py = self.sample_points[y]
+                    py = points[y]
                     c = cost[y] + self._distance(py, px)
                     if c < best_cost:
                         best_cost = c
@@ -136,7 +151,7 @@ class FastMarchingTree:
                 if best_y is None:
                     continue
 
-                if not self._collision_free(self.sample_points[best_y], px):
+                if not self._collision_free(points[best_y], px):
                     continue
                 parent[x] = best_y
                 cost[x] = best_cost
@@ -148,12 +163,9 @@ class FastMarchingTree:
             Vclosed.add(z)
 
         if x_goal_idx not in parent:
-            # cleanup
-            self.sample_points.pop()
-            self.sample_points.pop()
-            return [], []
+            return [], points
 
-        points_snapshot = list(self.sample_points)
+        points_snapshot = list(points)
         path_indices: List[int] = []
         cur = x_goal_idx
         while cur is not None:
@@ -161,10 +173,6 @@ class FastMarchingTree:
             cur = parent.get(cur)
 
         path_indices.reverse()
-
-        # cleanup start + goal
-        self.sample_points.pop()
-        self.sample_points.pop()
 
         return path_indices, points_snapshot
 
@@ -215,9 +223,17 @@ class FastMarchingTree:
         return rn
 
     # Convert list of indices to list of points
-    def _indices_path_to_path(self) -> List[Tuple[float, float]]:
-        snapshot = getattr(self, "_last_points_snapshot", self.sample_points)
-        return [snapshot[idx] for idx in self.indices_path]
+    def _indices_path_to_path(self, points_snapshot: Sequence[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        return [points_snapshot[idx] for idx in self.indices_path]
+
+    def _build_neighbor_graph(self, pts: NDArray) -> List[List[int]]:
+        neighbors: List[List[int]] = []
+        for i in range(len(pts)):
+            idxs = self.kdtree.query_ball_point(pts[i], self.connection_radius)
+            if i in idxs:
+                idxs.remove(i)
+            neighbors.append(idxs)
+        return neighbors
 
     # get the LinearRing polygon defining the workspace boundary
     def _get_workspace_linearring(self):

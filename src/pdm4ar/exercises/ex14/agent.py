@@ -94,8 +94,8 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
             start = (random.uniform(-10, 10), random.uniform(-10, 10))
             goal = (random.uniform(-10, 10), random.uniform(-10, 10))
 
-            print(f"Test {i+1}: start={start}, goal={goal}")
-            path = fmt.plan_path(start, goal)
+            path, length = fmt.plan_path(start, goal)
+            print(f"Test {i+1}: start={start}, goal={goal}, length={length}")
 
         assert True
 
