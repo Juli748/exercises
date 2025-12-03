@@ -13,11 +13,14 @@ from dg_commons.sim.models.obstacles import StaticObstacle
 from numpydantic import NDArray
 from pydantic import BaseModel
 
+from pdm4ar.exercises.ex14.fmt import FastMarchingTree
+
+
 class GlobalPlanMessage(BaseModel):
     # TODO: modify/add here the fields you need to send your global plan
     fake_id: int
     fake_name: str
-    fake_np_data: NDArray # If you need to send numpy arrays, annotate them with NDArray
+    fake_np_data: NDArray  # If you need to send numpy arrays, annotate them with NDArray
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,9 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
         pass
 
     def send_plan(self, init_sim_obs: InitSimGlobalObservations) -> str:
+
+        fmt = FastMarchingTree(initObservations=init_sim_obs, n_samples=10000)
+        fmt.plan_path((-5, -1), (5, 5))
         # TODO: implement here your global planning stack.
         global_plan_message = GlobalPlanMessage(
             fake_id=1,
