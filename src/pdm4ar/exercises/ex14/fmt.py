@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from mimetypes import init
 from os import path
 from pathlib import Path
 from random import sample
@@ -48,9 +49,7 @@ class FastMarchingTree:
         self.n_samples = n_samples
         self.robot_radius += robot_clearance
 
-        # sample random points within the workspace and non colliding using the Halton sequence
         self.sample_points = self._sample_workspace(self.n_samples)
-
         self.connection_radius = connection_radius_factor * self._compute_connection_radius(len(self.sample_points))
 
         pts = np.array(self.sample_points)
@@ -69,7 +68,7 @@ class FastMarchingTree:
         self.optimal_path = self._indices_path_to_path(points_snapshot)
         path_length = self.get_optimal_path_length()
 
-        self.export_to_json()
+        # self.export_to_json()
 
         return self.optimal_path, path_length
 
@@ -333,7 +332,7 @@ class FastMarchingTree:
                     return False
         return True
 
-    # For debugging: export workspace, obstacles, and samples to JSON
+    # For debugging: export workspace, obstacles, and samples to JSON for visualization
     def export_to_json(self) -> str:
         import json
         import re

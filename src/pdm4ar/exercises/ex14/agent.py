@@ -115,13 +115,13 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
         )
         return global_plan_message.model_dump_json(round_trip=True)
 
-    def create_adjacancy_matrix(self, init_sim_obs: InitSimGlobalObservations):
+    def create_adjacancy_matrix(self, init_sim_obs: InitSimGlobalObservations) -> tuple[np.ndarray, list[str]]:
         """
         Create a symmetric distance matrix between players, shared goals and collection points.
         Distances are computed via Fast Marching Tree paths. Returns the matrix and the labels.
         """
 
-        fmt = FastMarchingTree(initObservations=init_sim_obs, n_samples=10000)
+        fmt = FastMarchingTree(initObservations=init_sim_obs, n_samples=5000)
 
         labeled_points: list[tuple[str, np.ndarray]] = []
 
