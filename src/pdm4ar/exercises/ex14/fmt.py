@@ -46,7 +46,7 @@ class FastMarchingTree:
         self,
         initObservations: InitSimGlobalObservations,
         n_samples: int = 500,
-        connection_radius_factor: float = 2,
+        connection_radius_factor: float = 2.5,  # should be >= 2,
         robot_clearance: float = 0.1,
     ):
         self.static_obstacles: Sequence[StaticObstacle] = initObservations.dg_scenario.static_obstacles
