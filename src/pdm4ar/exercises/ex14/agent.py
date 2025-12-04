@@ -91,6 +91,8 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
         print(adj_mat)
         print("Labels:")
         print(labels)
+        paths_easy = self.easy_agent_goal_paths(adj_mat, labels)
+        # paths_optimal = self.optimal_agent_goal_paths(adj_mat, labels)
 
         """import random
 
@@ -108,11 +110,15 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
             print(f"Test {i+1}: start={start}, goal={goal}, length={length}")"""
 
         # TODO: implement here your global planning stack.
-        global_plan_message = GlobalPlanMessage(
-            fake_id=1,
-            fake_name="agent_1",
-            fake_np_data=np.array([[1, 2, 3], [4, 5, 6]]),
-        )
+
+        for i, agent in enumerate(paths_easy):
+            print(f"Path for {agent}: {paths_easy[agent]}")
+            print(f"Optimal Path for {agent}: {paths_optimal[agent]}")
+            global_plan_message = GlobalPlanMessage(
+                fake_id=i,
+                fake_name=agent,
+                fake_np_data=np.array(paths_easy[agent]),
+            )
         return global_plan_message.model_dump_json(round_trip=True)
 
     def create_adjacancy_matrix(self, init_sim_obs: InitSimGlobalObservations) -> tuple[np.ndarray, list[str]]:
@@ -154,3 +160,49 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
                 adjacency[j, i] = length
 
         return adjacency, labels
+
+    def easy_agent_goal_paths(self, A: np.ndarray, labels: list[str]) -> dict[str, list[str]]:
+        """Returns easy paths for the given agent number."""
+        shape = A.shape
+        agent_nr = 0
+        goal_nr = 0
+        collect_nr = 0
+        path = dict()
+        for i in labels:
+            if i.startswith("player"):
+                agent_nr += 1
+                path[i] = list()
+            elif i.startswith("goal"):
+                goal_nr += 1
+            else:
+                collect_nr += 1
+
+        first = True
+        current = np.zeros(agent_nr, dtype=int)
+        goal_open = goal_nr
+        while goal_open > 0:
+            for player in range(agent_nr):
+                min_dist = 1e9
+                min_goal = 0
+                min_collect = 0
+                if first:
+                    current[player] = player
+                for goal in range(agent_nr, agent_nr + goal_nr):
+                    for collect in range(agent_nr + goal_nr, shape[1]):
+                        if A[current[player], goal] + A[goal, collect] < min_dist:
+                            min_dist = A[current[player], goal] + A[goal, collect]
+                            min_goal = goal
+                            min_collect = collect
+                A[:, min_goal] = 1e9
+                A[min_goal, :] = 1e9
+
+                path[labels[player]].append(labels[min_goal])
+                path[labels[player]].append(labels[min_collect])
+                current[player] = min_collect
+                goal_open -= 1
+                if goal_open == 0:
+                    break
+            if first:
+                first = False
+
+        return path
