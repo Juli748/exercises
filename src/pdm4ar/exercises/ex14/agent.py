@@ -86,7 +86,7 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
 
     def send_plan(self, init_sim_obs: InitSimGlobalObservations) -> str:
 
-        adj_mat, labels = self.create_adjacancy_matrix(init_sim_obs)
+        adj_mat, paths, labels = self.create_adjacancy_matrix(init_sim_obs)
         print("Adjacency Matrix:")
         print(adj_mat)
         print("Labels:")
@@ -149,17 +149,22 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
 
         n = len(labeled_points)
         labels = [label for label, _ in labeled_points]
+
         adjacency = np.zeros((n, n), dtype=float)
+        paths: list[list[list[tuple[float, float]]]] = [[[] for _ in range(n)] for _ in range(n)]
 
         for i in range(n):
             pi = tuple(labeled_points[i][1].tolist())
             for j in range(i + 1, n):
                 pj = tuple(labeled_points[j][1].tolist())
-                _, length = fmt.plan_path(pi, pj)
+                path, length = fmt.plan_path(pi, pj)
                 adjacency[i, j] = length
                 adjacency[j, i] = length
 
-        return adjacency, labels
+                paths[i][j] = path
+                paths[j][i] = list(reversed(path))
+
+        return adjacency, paths, labels
 
     def easy_agent_goal_paths(self, A: np.ndarray, labels: list[str]) -> dict[str, list[str]]:
         """Returns easy paths for the given agent number."""
@@ -205,4 +210,5 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
             if first:
                 first = False
 
+        print("Easy paths:", path)
         return path
