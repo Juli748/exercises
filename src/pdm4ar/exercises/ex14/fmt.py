@@ -35,19 +35,25 @@ class FastMarchingTree:
     goal: Tuple[float, float]
 
     robot_radius: float = 0.6  # From diff drive geometry default
+    robot_clearance: float = 0.1
+
+    _start: Optional[Tuple[float, float]] = None
+    _goal: Optional[Tuple[float, float]] = None
+
+    treat_foreign_goals_as_obstacles: bool = True
 
     def __init__(
         self,
         initObservations: InitSimGlobalObservations,
         n_samples: int = 500,
-        connection_radius_factor: float = 1.5,
+        connection_radius_factor: float = 2,
         robot_clearance: float = 0.1,
     ):
         self.static_obstacles: Sequence[StaticObstacle] = initObservations.dg_scenario.static_obstacles
         self.shared_goals: Optional[Mapping[str, SharedPolygonGoal]] = initObservations.shared_goals
         self.collection_points: Optional[Mapping[str, CollectionPoint]] = initObservations.collection_points
         self.n_samples = n_samples
-        self.robot_radius += robot_clearance
+        self.robot_clearance = robot_clearance
 
         self.sample_points = self._sample_workspace(self.n_samples)
         self.connection_radius = connection_radius_factor * self._compute_connection_radius(len(self.sample_points))
@@ -60,15 +66,19 @@ class FastMarchingTree:
     def plan_path(
         self, start: Tuple[float, float], goal: Tuple[float, float]
     ) -> Tuple[List[Tuple[float, float]], float]:
+        # keep tuples for serialization / distances
         self._start = start
         self._goal = goal
+        # shapely points for contains/distance checks
+        self._start_point = Point(start)
+        self._goal_point = Point(goal)
 
         indices, points_snapshot = self._fmt_star(start, goal)
         self.indices_path = indices
         self.optimal_path = self._indices_path_to_path(points_snapshot)
         path_length = self.get_optimal_path_length()
 
-        # self.export_to_json()
+        self.export_to_json()
 
         return self.optimal_path, path_length
 
@@ -267,21 +277,31 @@ class FastMarchingTree:
                 continue
 
             # keep clearance from outer wall
-            if boundary_linearring.distance(p) <= self.robot_radius:
+            if boundary_linearring.distance(p) <= self.robot_radius + self.robot_clearance:
                 continue
 
-            inside_obstacle = False
+            colliding_obstacle = False
             for obs in self.static_obstacles:
                 geom = obs.shape
                 if geom.geom_type == "LinearRing":
                     continue
 
                 # robot-radius-aware: reject if distance ≤ robot_radius
-                if geom.distance(p) <= self.robot_radius:
-                    inside_obstacle = True
+                if geom.distance(p) <= self.robot_radius + self.robot_clearance:
+                    colliding_obstacle = True
                     break
 
-            if inside_obstacle:
+            colliding_goal = False
+            if self.shared_goals is not None and self.treat_foreign_goals_as_obstacles:
+                for goal in self.shared_goals.values():
+                    if hasattr(self, "_start_point") and hasattr(self, "_goal_point"):
+                        if goal.polygon.contains(self._start_point) or goal.polygon.contains(self._goal_point):
+                            continue
+                    if goal.polygon.distance(p) <= self.robot_radius + self.robot_clearance:
+                        colliding_goal = True
+                        break
+
+            if colliding_obstacle or colliding_goal:
                 continue
 
             samples.append((x, y))
@@ -320,7 +340,7 @@ class FastMarchingTree:
 
         # outer wall clearance
         ring = self._get_workspace_linearring()
-        if segment.distance(ring) <= self.robot_radius:
+        if segment.distance(ring) <= self.robot_radius + self.robot_clearance:
             return False
 
         for obs in self.static_obstacles:
@@ -328,8 +348,18 @@ class FastMarchingTree:
             if geom.geom_type in ("Polygon", "MultiPolygon"):
 
                 # robot-radius-aware: collision if segment is within robot radius
-                if segment.distance(geom) <= self.robot_radius:
+                if segment.distance(geom) <= self.robot_radius + self.robot_clearance:
                     return False
+
+        if self.shared_goals is not None and self.treat_foreign_goals_as_obstacles:
+            for goal in self.shared_goals.values():
+                if hasattr(self, "_start_point") and hasattr(self, "_goal_point"):
+                    if goal.polygon.contains(self._start_point) or goal.polygon.contains(self._goal_point):
+                        continue
+                # robot-radius-aware: collision if segment is within robot radius
+                if goal.polygon.distance(segment) <= self.robot_radius + self.robot_clearance:
+                    return False
+
         return True
 
     # For debugging: export workspace, obstacles, and samples to JSON for visualization
