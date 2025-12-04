@@ -25,7 +25,6 @@ from scipy.spatial import KDTree
 
 
 class FastMarchingTree:
-
     sample_points: List[Tuple[float, float]]
     neighbors: List[List[int]]
     indices_path: List[int]
@@ -34,7 +33,7 @@ class FastMarchingTree:
     start: Tuple[float, float]
     goal: Tuple[float, float]
 
-    robot_radius: float = 0.6  # From diff drive geometry default
+    robot_radius: float = 0.6
     robot_clearance: float = 0.1
 
     _start: Optional[Tuple[float, float]] = None
@@ -43,12 +42,9 @@ class FastMarchingTree:
     treat_foreign_goals_as_obstacles: bool = True
     n_samples: int = 5000
     robot_clearance: float = 0.1
-    connection_radius: float = 2.5  # ≥2 required for asymptotic optimality (Karaman & Frazzoli 2011)
+    connection_radius: float = 2.5
 
-    def __init__(
-        self,
-        initObservations: InitSimGlobalObservations,
-    ):
+    def __init__(self, initObservations: InitSimGlobalObservations):
         self.static_obstacles: Sequence[StaticObstacle] = initObservations.dg_scenario.static_obstacles
         self.shared_goals: Optional[Mapping[str, SharedPolygonGoal]] = initObservations.shared_goals
         self.collection_points: Optional[Mapping[str, CollectionPoint]] = initObservations.collection_points
@@ -58,14 +54,11 @@ class FastMarchingTree:
         self.kdtree = KDTree(pts)
         self.neighbors = self._build_neighbor_graph(pts)
 
-    # Plan a path from start to goal using FMT*
     def plan_path(
         self, start: Tuple[float, float], goal: Tuple[float, float]
     ) -> Tuple[List[Tuple[float, float]], float]:
-        # keep tuples for serialization / distances
         self._start = start
         self._goal = goal
-        # shapely points for contains/distance checks
         self._start_point = Point(start)
         self._goal_point = Point(goal)
 
@@ -75,14 +68,11 @@ class FastMarchingTree:
         path_length = self.get_optimal_path_length()
 
         self.export_to_json()
-
         return self.optimal_path, path_length
 
-    # compute the total Euclidean length of the optimal path
     def get_optimal_path_length(self) -> float:
         if not hasattr(self, "optimal_path") or len(self.optimal_path) < 2:
             return 0.0
-
         total = 0.0
         for i in range(len(self.optimal_path) - 1):
             p = self.optimal_path[i]
@@ -90,7 +80,6 @@ class FastMarchingTree:
             total += self._distance(p, q)
         return total
 
-    # FMT* core algorithm
     def _fmt_star(
         self, start: Tuple[float, float], goal: Tuple[float, float]
     ) -> Tuple[List[int], List[Tuple[float, float]]]:
@@ -116,16 +105,13 @@ class FastMarchingTree:
         connect_new_vertex(goal_idx, goal)
 
         if self._distance(start, goal) <= self.connection_radius:
-            if goal_idx not in neighbors[start_idx]:
-                neighbors[start_idx].append(goal_idx)
-            if start_idx not in neighbors[goal_idx]:
-                neighbors[goal_idx].append(start_idx)
+            neighbors[start_idx].append(goal_idx)
+            neighbors[goal_idx].append(start_idx)
 
         x_init_idx = start_idx
         x_goal_idx = goal_idx
 
         n = len(points)
-
         V = set(range(n))
 
         Vopen: Set[int] = {x_init_idx}
@@ -141,6 +127,7 @@ class FastMarchingTree:
             z = min(Vopen, key=lambda i: cost[i])
             if z == x_goal_idx:
                 break
+
             X_near = [x for x in neighbors[z] if x in Vunvisited]
 
             for x in X_near:
@@ -164,6 +151,7 @@ class FastMarchingTree:
 
                 if not self._collision_free(points[best_y], px):
                     continue
+
                 parent[x] = best_y
                 cost[x] = best_cost
 
@@ -184,15 +172,9 @@ class FastMarchingTree:
             cur = parent.get(cur)
 
         path_indices.reverse()
-
         return path_indices, points_snapshot
 
-    # Compute free space area μ(X_free)
     def _compute_free_space_area(self) -> float:
-        """
-        Compute μ(X_free): area of workspace minus polygonal obstacles.
-        Used in the FMT* connection radius formula.
-        """
         ring = self._get_workspace_linearring()
         workspace_poly = Polygon(ring)
 
@@ -209,19 +191,10 @@ class FastMarchingTree:
 
         obstacles_union = unary_union(obstacle_geoms)
         obstacles_in_ws = obstacles_union.intersection(workspace_poly)
-
         free_area = workspace_poly.area - obstacles_in_ws.area
         return max(free_area, 0.0)
 
-    # Compute FMT* connection radius r_n
     def _compute_connection_radius(self, n_vertices: int) -> float:
-        """
-        Compute the FMT* connection radius r_n for d = 2:
-
-            r_n = ((3/2) * μ(X_free) / π)^(1/2) * sqrt(log n / n)
-
-        where μ(X_free) is the free-space area.
-        """
         d = 2
         mu_free = self._compute_free_space_area()
         zeta_d = math.pi
@@ -233,11 +206,9 @@ class FastMarchingTree:
         rn = gamma * (math.log(n_vertices) / n_vertices) ** (1.0 / d)
         return rn
 
-    # Convert list of indices to list of points
     def _indices_path_to_path(self, points_snapshot: Sequence[Tuple[float, float]]) -> List[Tuple[float, float]]:
         return [points_snapshot[idx] for idx in self.indices_path]
 
-    # Build neighbor graph using KDTree
     def _build_neighbor_graph(self, pts: NDArray) -> List[List[int]]:
         neighbors: List[List[int]] = []
         for i in range(len(pts)):
@@ -247,7 +218,6 @@ class FastMarchingTree:
             neighbors.append(idxs)
         return neighbors
 
-    # get the LinearRing polygon defining the workspace boundary
     def _get_workspace_linearring(self):
         for obs in self.static_obstacles:
             geom = obs.shape
@@ -255,7 +225,6 @@ class FastMarchingTree:
                 return geom
         raise RuntimeError("No LinearRing workspace boundary found.")
 
-    # sample random points within the workspace and non colliding using the Halton sequence
     def _sample_workspace(self, n_samples: int) -> List[Tuple[float, float]]:
         boundary_linearring = self._get_workspace_linearring()
         boundary_polygon = Polygon(boundary_linearring)
@@ -263,16 +232,15 @@ class FastMarchingTree:
 
         halton = self._halton_sequence(size=n_samples, dim=2)
         samples = []
+
         for h in halton:
             x = minx + h[0] * (maxx - minx)
             y = miny + h[1] * (maxy - miny)
-
             p = Point(x, y)
 
             if not boundary_polygon.contains(p):
                 continue
 
-            # keep clearance from outer wall
             if boundary_linearring.distance(p) <= self.robot_radius + self.robot_clearance:
                 continue
 
@@ -281,8 +249,6 @@ class FastMarchingTree:
                 geom = obs.shape
                 if geom.geom_type == "LinearRing":
                     continue
-
-                # robot-radius-aware: reject if distance ≤ robot_radius
                 if geom.distance(p) <= self.robot_radius + self.robot_clearance:
                     colliding_obstacle = True
                     break
@@ -304,20 +270,18 @@ class FastMarchingTree:
 
         return samples
 
-    # The Halton Sequence, Lecture 9: Sampling-Based Methods p. 15
     @staticmethod
     def _halton_sequence(size, dim, bases=None):
         if bases is None:
             bases = [2, 3, 5, 7, 11][:dim]
 
         def vdc(n, base):
-            vdc, denom = 0.0, 1.0
+            vdc_val, denom = 0.0, 1.0
             while n:
                 n, remainder = divmod(n, base)
                 denom *= base
-
-                vdc += remainder / denom
-            return vdc
+                vdc_val += remainder / denom
+            return vdc_val
 
         seq = np.zeros((size, dim))
         for i in range(size):
@@ -325,25 +289,20 @@ class FastMarchingTree:
                 seq[i, d] = vdc(i + 1, bases[d])
         return seq
 
-    # Euclidean distance between two points
     @staticmethod
     def _distance(p: Tuple[float, float], q: Tuple[float, float]) -> float:
         return float(math.hypot(p[0] - q[0], p[1] - q[1]))
 
-    # check if the line segment between p and q is collision-free
     def _collision_free(self, p, q):
         segment = LineString([p, q])
-
-        # outer wall clearance
         ring = self._get_workspace_linearring()
+
         if segment.distance(ring) <= self.robot_radius + self.robot_clearance:
             return False
 
         for obs in self.static_obstacles:
             geom = obs.shape
             if geom.geom_type in ("Polygon", "MultiPolygon"):
-
-                # robot-radius-aware: collision if segment is within robot radius
                 if segment.distance(geom) <= self.robot_radius + self.robot_clearance:
                     return False
 
@@ -352,13 +311,11 @@ class FastMarchingTree:
                 if hasattr(self, "_start_point") and hasattr(self, "_goal_point"):
                     if goal.polygon.contains(self._start_point) or goal.polygon.contains(self._goal_point):
                         continue
-                # robot-radius-aware: collision if segment is within robot radius
                 if goal.polygon.distance(segment) <= self.robot_radius + self.robot_clearance:
                     return False
 
         return True
 
-    # For debugging: export workspace, obstacles, and samples to JSON for visualization
     def export_to_json(self) -> str:
         import json
         import re
