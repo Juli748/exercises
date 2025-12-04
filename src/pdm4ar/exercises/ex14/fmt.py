@@ -33,16 +33,17 @@ class FastMarchingTree:
     start: Tuple[float, float]
     goal: Tuple[float, float]
 
-    robot_radius: float = 0.6
-    robot_clearance: float = 0.1
-
     _start: Optional[Tuple[float, float]] = None
     _goal: Optional[Tuple[float, float]] = None
 
-    treat_foreign_goals_as_obstacles: bool = True
-    n_samples: int = 5000
+    # Tuneable parameters
+    robot_radius: float = 0.6
     robot_clearance: float = 0.1
-    connection_radius: float = 2.5
+
+    treat_foreign_goals_as_obstacles: bool = True
+
+    n_samples: int = 5000
+    connection_radius: float = 2.5  # ≥2 required for asymptotic optimality (Karaman & Frazzoli 2011)
 
     def __init__(self, initObservations: InitSimGlobalObservations):
         self.static_obstacles: Sequence[StaticObstacle] = initObservations.dg_scenario.static_obstacles
