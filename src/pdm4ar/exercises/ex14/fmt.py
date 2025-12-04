@@ -68,7 +68,7 @@ class FastMarchingTree:
         self.optimal_path = self._indices_path_to_path(points_snapshot)
         path_length = self.get_optimal_path_length()
 
-        self.export_to_json()
+        # self.export_to_json()
         return self.optimal_path, path_length
 
     def get_optimal_path_length(self) -> float:
