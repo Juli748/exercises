@@ -99,7 +99,7 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
         # number of random tests
         num_tests = 20
 
-        fmt = FastMarchingTree(initObservations=init_sim_obs, n_samples=10000)
+        fmt = FastMarchingTree(initObservations=init_sim_obs)
 
         for i in range(num_tests):
             # generate random points
@@ -127,7 +127,7 @@ class Pdm4arGlobalPlanner(GlobalPlanner):
         Distances are computed via Fast Marching Tree paths. Returns the matrix and the labels.
         """
 
-        fmt = FastMarchingTree(initObservations=init_sim_obs, n_samples=5000)
+        fmt = FastMarchingTree(initObservations=init_sim_obs)
 
         labeled_points: list[tuple[str, np.ndarray]] = []
 

@@ -41,23 +41,19 @@ class FastMarchingTree:
     _goal: Optional[Tuple[float, float]] = None
 
     treat_foreign_goals_as_obstacles: bool = True
+    n_samples: int = 5000
+    robot_clearance: float = 0.1
+    connection_radius: float = 2.5  # ≥2 required for asymptotic optimality (Karaman & Frazzoli 2011)
 
     def __init__(
         self,
         initObservations: InitSimGlobalObservations,
-        n_samples: int = 500,
-        connection_radius_factor: float = 2.5,  # should be >= 2,
-        robot_clearance: float = 0.1,
     ):
         self.static_obstacles: Sequence[StaticObstacle] = initObservations.dg_scenario.static_obstacles
         self.shared_goals: Optional[Mapping[str, SharedPolygonGoal]] = initObservations.shared_goals
         self.collection_points: Optional[Mapping[str, CollectionPoint]] = initObservations.collection_points
-        self.n_samples = n_samples
-        self.robot_clearance = robot_clearance
 
         self.sample_points = self._sample_workspace(self.n_samples)
-        self.connection_radius = connection_radius_factor * self._compute_connection_radius(len(self.sample_points))
-
         pts = np.array(self.sample_points)
         self.kdtree = KDTree(pts)
         self.neighbors = self._build_neighbor_graph(pts)
